@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>365 Planner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">365</span> Planner</div>
+    <nav class="tabs" id="tabs" aria-label="View">
+      <button data-view="day">Day</button>
+      <button data-view="week">Week</button>
+      <button data-view="year">Year</button>
+    </nav>
+    <div class="datenav">
+      <button id="prev" class="icon-btn" title="Previous (←)">‹</button>
+      <button id="todayBtn" class="btn">Today</button>
+      <button id="next" class="icon-btn" title="Next (→)">›</button>
+      <input type="date" id="datePick" aria-label="Pick a date">
+    </div>
+    <div class="spacer"></div>
+    <div class="clock" title="Current time in London (Europe/London)">
+      <span class="clock-label">London</span>
+      <span id="clock">--:--:--</span>
+    </div>
+    <span id="saveState" class="save-state"></span>
+    <button id="settingsBtn" class="icon-btn" title="Settings &amp; backup">⚙</button>
+  </header>
+
+  <div class="subbar">
+    <div class="title-wrap">
+      <h1 id="title"></h1>
+      <span id="titleMeta" class="title-meta"></span>
+    </div>
+    <div id="subActions" class="sub-actions"></div>
+  </div>
+
+  <main id="main"></main>
+
+  <div id="selbar" class="selbar" hidden></div>
+  <div id="wkpop" class="wkpop" hidden></div>
+
+  <dialog id="settings">
+    <form method="dialog" class="settings-form">
+      <h2>Settings</h2>
+
+      <label class="field">
+        <span>Default slot length for new days</span>
+        <select id="setDefault">
+          <option value="1">60 min (1 per hour)</option>
+          <option value="2">30 min (2 per hour)</option>
+          <option value="3">20 min (3 per hour)</option>
+          <option value="4">15 min (4 per hour)</option>
+          <option value="5">12 min (5 per hour)</option>
+          <option value="6">10 min (6 per hour)</option>
+          <option value="10">6 min (10 per hour)</option>
+          <option value="12">5 min (12 per hour)</option>
+        </select>
+      </label>
+
+      <div class="field">
+        <span>Hours shown in day &amp; week views</span>
+        <div class="row">
+          <select id="setStart"></select>
+          <span class="muted">to</span>
+          <select id="setEnd"></select>
+        </div>
+      </div>
+
+      <div class="field">
+        <span>Outlook calendar</span>
+        <p class="muted small">
+          In Outlook on the web: <b>Settings → Calendar → Shared calendars → Publish a calendar</b>,
+          pick your calendar and “Can view all details”, click Publish, then copy the <b>ICS</b> link and paste it here.
+          Events appear read-only in your slots and refresh every 15 minutes.
+        </p>
+        <input id="icsUrl" type="url" placeholder="https://outlook.office365.com/owa/calendar/…/calendar.ics" autocomplete="off" spellcheck="false">
+        <div class="row">
+          <button type="button" class="btn primary" id="icsSave">Connect &amp; sync</button>
+          <button type="button" class="btn" id="icsRemove">Disconnect</button>
+        </div>
+        <p id="icsStatus" class="muted small"></p>
+        <label class="check"><input type="checkbox" id="setMerge"> Show each Outlook event as one merged slot <span class="muted small">(events up to 4 h)</span></label>
+      </div>
+
+      <div class="field" id="catSection">
+        <span>Event categories &amp; colours</span>
+        <p class="muted small">
+          Outlook events get the colour of the first category whose keywords appear in the title
+          (matched at the start of a word, so “run” matches “Running” but not “brunch”).
+          If a title matches several categories, the higher one wins. Use ↑ to reorder.
+        </p>
+        <div id="catList" class="cat-list"></div>
+        <div class="row">
+          <button type="button" class="btn" id="catAdd">+ Add category</button>
+          <button type="button" class="btn" id="catReset">Reset to defaults</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span>Backup</span>
+        <p class="muted small">Your data is stored in this browser only. Export a backup now and then, or to move to another device.</p>
+        <div class="row">
+          <button type="button" class="btn" id="exportBtn">Export JSON</button>
+          <button type="button" class="btn" id="importBtn">Import JSON</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <button type="button" class="btn danger" id="wipeBtn">Delete all data</button>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="btn primary" value="close">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input type="file" id="importFile" accept="application/json,.json" hidden>
+  <script src="calendar.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
