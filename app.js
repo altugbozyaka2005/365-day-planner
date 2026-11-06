@@ -3242,9 +3242,29 @@
   // ---------------------------------------------------------------------------
   // Notifications when a task, event or slot ends, with quick rating buttons (see sw.js)
   // ---------------------------------------------------------------------------
+  // Notification settings belong to THIS device (permission is per browser), so they're kept
+  // out of the synced planner data; otherwise signing in on another device would switch them off.
+  const NOTIFY_STORE = 'planner365.notify';
+  let notifyPrefs = (() => {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem(NOTIFY_STORE)); } catch (e) { /* ignore */ }
+    return { on: false, scope: 'all', sound: true, ...((p && typeof p === 'object') ? p : (data.settings.notify || {})) };
+  })();
+  function saveNotifyPrefs() {
+    try { localStorage.setItem(NOTIFY_STORE, JSON.stringify(notifyPrefs)); } catch (e) { /* ignore */ }
+  }
+  saveNotifyPrefs();
+  // keep several open tabs in step
+  window.addEventListener('storage', (e) => {
+    if (e.key !== NOTIFY_STORE || !e.newValue) return;
+    try { Object.assign(notifyPrefs, JSON.parse(e.newValue)); } catch (err) { /* ignore */ }
+    if ($('#settings').open) updateNotifyStatus();
+  });
+
   let swReg = null;
   if ('serviceWorker' in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register('sw.js').then((r) => { swReg = r; }).catch(() => {});
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.ready.then((r) => { swReg = r; }).catch(() => {});
     navigator.serviceWorker.addEventListener('message', (e) => {
       const msg = e.data || {};
       if (msg.type === 'rate') applyQuickRate(msg);
@@ -3289,29 +3309,43 @@
     if (el) el.scrollIntoView({ block: 'center' });
   }
 
-  // A short two-note chime. Browsers only allow sound after you've clicked/typed in the page once.
+  // "Time's up" sound: a three-note bell made with Web Audio (no sound files needed).
+  // Browsers only allow a page to play sound after you've clicked or typed in it once, so the
+  // audio is unlocked on your first click/keypress and then keeps working in a background tab.
   let audioCtx = null;
   function unlockAudio() {
     try {
       audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
     } catch (e) { /* no audio */ }
   }
-  document.addEventListener('pointerdown', unlockAudio, { passive: true });
-  document.addEventListener('keydown', unlockAudio, { passive: true });
-  function chime() {
-    if (!audioCtx || audioCtx.state !== 'running') return false;
-    const t0 = audioCtx.currentTime;
-    [[880, 0], [1318.5, 0.18]].forEach(([f, dt]) => {
-      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.type = 'sine';
-      o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, t0 + dt);
-      g.gain.exponentialRampToValueAtTime(0.25, t0 + dt + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.6);
-      o.connect(g).connect(audioCtx.destination);
-      o.start(t0 + dt);
-      o.stop(t0 + dt + 0.65);
+  ['pointerdown', 'keydown', 'touchend'].forEach((t) => document.addEventListener(t, unlockAudio, { passive: true }));
+  function audioReady() { return !!audioCtx && audioCtx.state === 'running'; }
+  // Resolves true if the sound actually played.
+  async function chime() {
+    if (!audioCtx) return false;
+    if (audioCtx.state !== 'running') {
+      try { await Promise.race([audioCtx.resume(), new Promise((r) => setTimeout(r, 400))]); } catch (e) { /* blocked */ }
+      if (audioCtx.state !== 'running') return false;
+    }
+    const t0 = audioCtx.currentTime + 0.05;
+    const out = audioCtx.createGain();
+    out.gain.value = 0.9;
+    out.connect(audioCtx.destination);
+    // C6 – E6 – G6, each a soft bell (fundamental + quieter overtone)
+    [[1046.5, 0], [1318.5, 0.16], [1568, 0.32]].forEach(([f, dt], i) => {
+      [[f, 'triangle', 0.32], [f * 2.01, 'sine', 0.08]].forEach(([freq, type, peak]) => {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        const len = i === 2 ? 1.4 : 0.7;
+        o.type = type;
+        o.frequency.value = freq;
+        g.gain.setValueAtTime(0.0001, t0 + dt);
+        g.gain.exponentialRampToValueAtTime(peak, t0 + dt + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + len);
+        o.connect(g).connect(out);
+        o.start(t0 + dt);
+        o.stop(t0 + dt + len + 0.05);
+      });
     });
     return true;
   }
@@ -3351,11 +3385,13 @@
         ? [{ action: 'g', title: '✅ Completed' }, { action: 'y', title: '🟡 Not efficient' }, { action: 'r', title: '🔴 Distracted' }]
         : [{ action: 'g', title: '✅ Completed' }, { action: 'no', title: 'Not completed…' }];
     }
-    const played = !opts.quiet && data.settings.notify.sound && chime();
+    // opts.played: the bell already rang for this batch; otherwise ring it now (tests)
+    const played = opts.played || (!opts.quiet && notifyPrefs.sound && await chime());
     const body = label + (opts.test ? ' (test: rating it marks your current slot)' : '');
     try {
-      if (swReg) {
-        await swReg.showNotification(title, { body, tag, data: d, actions, requireInteraction: true, renotify: true, silent: !!played || !!opts.quiet });
+      const reg = swReg || (navigator.serviceWorker && await Promise.race([navigator.serviceWorker.ready, new Promise((r) => setTimeout(r, 1500))]));
+      if (reg) {
+        await reg.showNotification(title, { body, tag, data: d, actions, requireInteraction: true, renotify: true, silent: !!played || !!opts.quiet });
         return;
       }
     } catch (e) { /* fall back below */ }
@@ -3366,8 +3402,9 @@
   // Each check looks for anything whose end time passed since the previous check
   // (every 10 s; background tabs may only check about once a minute).
   let lastCheck = null;
-  function checkSlotEnd() {
-    if (!data.settings.notify.on) { lastCheck = null; return; }
+  async function checkSlotEnd() {
+    const notifying = notifyPrefs.on && 'Notification' in window && Notification.permission === 'granted';
+    if (!notifying && !notifyPrefs.sound) { lastCheck = null; return; }
     const now = londonNow();
     if (!lastCheck || lastCheck.date !== now.date || now.min < lastCheck.min) { lastCheck = { date: now.date, min: now.min }; return; }
     const from = lastCheck.min, to = now.min;
@@ -3376,18 +3413,32 @@
     const key = now.date;
     const { startHour: sh, endHour: eh } = data.settings;
     const ended = (e) => e > from && e <= to && e > sh * 60 && e <= eh * 60;
-    let n = 0;
-    for (const it of itemsOf(key)) if (ended(it.e) && !it.st) notifyFor(key, { kind: 'item', id: it.id }, { quiet: n++ > 0 });
-    for (const ev of eventsOn(key)) if (ended(ev.e) && !evStatus(key, ev)) notifyFor(key, { kind: 'event', ev }, { quiet: n++ > 0 });
-    if (data.settings.notify.scope === 'all') {
+    const targets = [];
+    for (const it of itemsOf(key)) if (ended(it.e) && !it.st) targets.push({ kind: 'item', id: it.id });
+    for (const ev of eventsOn(key)) if (ended(ev.e) && !evStatus(key, ev)) targets.push({ kind: 'event', ev });
+    if (notifyPrefs.scope === 'all') {
       for (const u of unitsOfDay(key)) {
-        if (ended(u.m + u.L) && !u.items.length && !u.evs.length && !looseEvents(key, u).length) notifyFor(key, { kind: 'slot', m: u.m, L: u.L }, { quiet: n++ > 0 });
+        if (ended(u.m + u.L) && !u.items.length && !u.evs.length && !looseEvents(key, u).length) targets.push({ kind: 'slot', m: u.m, L: u.L });
       }
     }
+    if (!targets.length) return;
+    // one bell per batch, and only from one tab when several are open
+    let played = false;
+    if (notifyPrefs.sound) {
+      const stamp = `${key} ${to}`;
+      let first = true;
+      try {
+        first = localStorage.getItem('planner365.lastChime') !== stamp;
+        localStorage.setItem('planner365.lastChime', stamp);
+      } catch (e) { /* ignore */ }
+      if (first) played = await chime();
+    }
+    if (!notifying) return;
+    targets.forEach((t, i) => notifyFor(key, t, { played, quiet: i > 0 }));
   }
 
   function updateNotifyStatus() {
-    const n = data.settings.notify;
+    const n = notifyPrefs;
     const supported = 'Notification' in window && window.isSecureContext;
     const granted = supported && Notification.permission === 'granted';
     let txt;
@@ -3396,35 +3447,36 @@
     else if (Notification.permission === 'denied') txt = 'Notifications are blocked for this site. Click the icon left of the address bar → allow Notifications, then try again.';
     else if (n.on && granted) txt = `On: you'll be asked to rate each task, event and slot as it ends.${Notification.maxActions >= 3 ? '' : ' (This browser shows 2 buttons per notification, so “Not completed…” opens a second question.)'}`;
     else txt = 'Off.';
+    if (n.sound) txt += audioReady() ? ' Sound: on.' : ' Sound: click anywhere in the planner once after opening it, so the browser allows it to play sound.';
     $('#notifyStatus').textContent = txt;
     $('#notifyOn').textContent = n.on && granted ? 'Turn off notifications' : 'Turn on notifications';
     $('#notifyScope').value = n.scope;
     $('#notifySound').checked = !!n.sound;
   }
   $('#notifyOn').addEventListener('click', async () => {
-    const n = data.settings.notify;
+    const n = notifyPrefs;
     unlockAudio();
     if (n.on && Notification.permission === 'granted') n.on = false;
     else if ('Notification' in window && window.isSecureContext) {
       const p = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
       n.on = p === 'granted';
     }
-    save();
+    saveNotifyPrefs();
     lastCheck = null;
     checkSlotEnd();
     updateNotifyStatus();
   });
   $('#notifyTest').addEventListener('click', async () => {
     unlockAudio();
-    if (!('Notification' in window)) { updateNotifyStatus(); return; }
-    if (Notification.permission !== 'granted' && (await Notification.requestPermission()) !== 'granted') { updateNotifyStatus(); return; }
+    if (!('Notification' in window)) { if (notifyPrefs.sound) chime(); updateNotifyStatus(); return; }
+    if (Notification.permission !== 'granted' && (await Notification.requestPermission()) !== 'granted') { if (notifyPrefs.sound) chime(); updateNotifyStatus(); return; }
     const now = londonNow();
     const u = unitAt(now.date, now.min);
     notifyFor(now.date, { kind: 'slot', m: u.m, L: u.L }, { test: true });
     updateNotifyStatus();
   });
-  $('#notifyScope').addEventListener('change', (e) => { data.settings.notify.scope = e.target.value; save(); });
-  $('#notifySound').addEventListener('change', (e) => { data.settings.notify.sound = e.target.checked; save(); });
+  $('#notifyScope').addEventListener('change', (e) => { notifyPrefs.scope = e.target.value; saveNotifyPrefs(); });
+  $('#notifySound').addEventListener('change', (e) => { notifyPrefs.sound = e.target.checked; saveNotifyPrefs(); if (e.target.checked) { unlockAudio(); chime(); } updateNotifyStatus(); });
 
   // Rating links opened by a notification when no planner tab was open (?rate=… / ?open=…)
   (() => {

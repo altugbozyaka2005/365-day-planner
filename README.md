@@ -36,7 +36,7 @@ There's no password reset. If you forget the password, the synced copy can't be 
 
 ## Slot-end notifications
 
-In **⚙ Settings → Slot-end notifications**, click **Turn on notifications**. When each slot ends you get a notification with a chime. Click **✅ Completed** or **Not completed…**, which then asks **🔴 Distracted** or **🟡 Not efficient**. Chrome allows only two buttons per notification, hence the two steps. Keep the planner open in a tab; it can be in the background. On macOS, set Chrome's notifications to **Alerts** in System Settings → Notifications so the buttons stay on screen.
+In **⚙ Settings → Slot-end notifications**, click **Turn on notifications**. When each slot ends you get a notification with a chime. Click **✅ Completed** or **Not completed…**, which then asks **🔴 Distracted** or **🟡 Not efficient**. Chrome allows only two buttons per notification, hence the two steps. A bell also rings when a slot ends, even with notifications off; click anywhere in the planner once after opening it so the browser allows sound. These settings apply to each device separately and aren't synced. Keep the planner open in a tab; it can be in the background. On macOS, set Chrome's notifications to **Alerts** in System Settings → Notifications so the buttons stay on screen.
 
 ## Connect Outlook
 
