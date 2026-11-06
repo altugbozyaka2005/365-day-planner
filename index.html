@@ -26,6 +26,7 @@
       <span id="clock">--:--:--</span>
     </div>
     <span id="saveState" class="save-state"></span>
+    <button id="syncBadge" class="icon-btn sync-badge" hidden>☁</button>
     <button id="settingsBtn" class="icon-btn" title="Settings &amp; backup">⚙</button>
   </header>
 
@@ -37,14 +38,49 @@
     <div id="subActions" class="sub-actions"></div>
   </div>
 
+  <div class="quickadd-wrap" id="quickAddWrap">
+    <div class="quickadd">
+      <span class="qa-ico">＋</span>
+      <input id="quickAdd" placeholder="Quick add: “gym tomorrow 7–8 weekly”, “call mum fri 6pm for 30m”, “buy milk” (no time → inbox)" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="qaPreview" class="qa-preview"></div>
+  </div>
+
   <main id="main"></main>
 
   <div id="selbar" class="selbar" hidden></div>
   <div id="wkpop" class="wkpop" hidden></div>
+  <div id="evEdit" class="wkpop ev-edit-box" hidden></div>
+  <div id="itemMenu" class="wkpop item-menu" hidden></div>
+  <div id="tplMenu" class="wkpop tpl-menu" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="dragGhost" class="drag-ghost" hidden></div>
 
   <dialog id="settings">
     <form method="dialog" class="settings-form">
       <h2>Settings</h2>
+
+      <div class="field" id="syncSection">
+        <span>Sync across devices</span>
+        <p class="muted small">
+          Sign in with the same username and password on your laptop and phone to keep one copy of your planner everywhere.
+          Everything is encrypted in your browser before it's uploaded, so the server can't read it.
+          There's no password reset: if you forget it, the synced copy can't be opened (each device keeps its own copy).
+        </p>
+        <div id="syncOut" class="sync-form">
+          <input id="syncUser" placeholder="Username" autocomplete="username" spellcheck="false">
+          <input id="syncPass" type="password" placeholder="Password (8+ characters)" autocomplete="current-password">
+          <div class="row">
+            <button type="button" class="btn primary" id="syncSignIn">Sign in</button>
+            <button type="button" class="btn" id="syncCreate">Create account</button>
+          </div>
+        </div>
+        <div id="syncIn" class="row" hidden>
+          <button type="button" class="btn" id="syncNow">Sync now</button>
+          <button type="button" class="btn" id="syncSignOut">Sign out</button>
+        </div>
+        <p id="syncStatus" class="muted small"></p>
+      </div>
 
       <label class="field">
         <span>Default slot length for new days</span>
@@ -82,7 +118,27 @@
           <button type="button" class="btn" id="icsRemove">Disconnect</button>
         </div>
         <p id="icsStatus" class="muted small"></p>
-        <label class="check"><input type="checkbox" id="setMerge"> Show each Outlook event as one merged slot <span class="muted small">(events up to 4 h)</span></label>
+      </div>
+
+      <div class="field" id="notifySection">
+        <span>Slot-end notifications</span>
+        <p class="muted small">
+          When a slot ends you get a notification (with a chime) and can rate it right there:
+          <b>✅ Completed</b> or <b>Not completed…</b>, which then asks <b>🔴 Distracted</b> / <b>🟡 Not efficient</b>.
+          Keep the planner open in a tab (it can be in the background). Only slots within your shown hours are included.
+        </p>
+        <div class="row">
+          <button type="button" class="btn primary" id="notifyOn">Turn on notifications</button>
+          <button type="button" class="btn" id="notifyTest">Send a test</button>
+        </div>
+        <label class="field-inline">Notify for
+          <select id="notifyScope">
+            <option value="all">every slot</option>
+            <option value="planned">only slots with a plan or Outlook event</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="notifySound"> Play a chime</label>
+        <p id="notifyStatus" class="muted small"></p>
       </div>
 
       <div class="field" id="catSection">
@@ -111,6 +167,11 @@
       <div class="field">
         <button type="button" class="btn danger" id="wipeBtn">Delete all data</button>
       </div>
+
+      <details class="field help-details">
+        <summary>How to use the planner</summary>
+        <div id="helpBox"></div>
+      </details>
 
       <div class="dialog-actions">
         <button class="btn primary" value="close">Done</button>

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Local server for 365 Planner.
 
-Serves the app files and relays your Outlook calendar (ICS) feed, which
-browsers can't fetch directly because Outlook doesn't allow cross-site requests.
+Serves the app files, relays your Outlook calendar (ICS) feed (browsers can't fetch
+it directly because Outlook doesn't allow cross-site requests), and stores encrypted
+sync data in ./.sync-data so "Sync across devices" also works locally.
 
 Usage:  python3 server.py            -> http://localhost:8365
         python3 server.py 9000       -> http://localhost:9000
@@ -10,7 +11,10 @@ Usage:  python3 server.py            -> http://localhost:8365
 import http.server
 import json
 import os
+import re
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +24,9 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8365
 # Only Microsoft calendar hosts may be fetched through the relay.
 ALLOWED_HOSTS = ("office365.com", "outlook.com", "live.com", "office.com")
 MAX_BYTES = 25 * 1024 * 1024
+SYNC_DIR = os.path.join(ROOT, ".sync-data")
+SYNC_LOCK = threading.Lock()
+MAX_SYNC = 5 * 1024 * 1024
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -42,7 +49,49 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_GET(self):
+        # never serve the sync store or hidden folders as static files
+        if self.path.split("?")[0].startswith(("/.sync-data", "/.git", "/.claude")):
+            return self._json(404, {"error": "Not found"})
+        return super().do_GET()
+
+    def _sync(self):
+        """Encrypted sync storage: same API as api/sync.js, kept in ./.sync-data."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_SYNC:
+                return self._json(413, {"error": "Too large"})
+            body = json.loads(self.rfile.read(length) or b"{}")
+            acc = str(body.get("id", ""))
+            if not re.fullmatch(r"[a-f0-9]{64}", acc):
+                return self._json(400, {"error": "Bad account id"})
+            path = os.path.join(SYNC_DIR, acc + ".json")
+            with SYNC_LOCK:
+                cur = None
+                if os.path.exists(path):
+                    with open(path) as f:
+                        cur = json.load(f)
+                if body.get("op") == "get":
+                    if not cur:
+                        return self._json(404, {"notFound": True})
+                    return self._json(200, {"rev": cur["rev"], "payload": cur["payload"], "updatedAt": cur["updatedAt"]})
+                if body.get("op") == "put":
+                    rev = cur["rev"] if cur else 0
+                    if int(body.get("rev") or 0) != rev:
+                        return self._json(409, {"rev": rev})
+                    os.makedirs(SYNC_DIR, exist_ok=True)
+                    tmp = path + ".tmp"
+                    with open(tmp, "w") as f:
+                        json.dump({"rev": rev + 1, "payload": str(body.get("payload", "")), "updatedAt": int(time.time() * 1000)}, f)
+                    os.replace(tmp, path)
+                    return self._json(200, {"rev": rev + 1})
+            return self._json(400, {"error": "Unknown operation"})
+        except Exception as e:
+            return self._json(500, {"error": "Sync storage error: %s" % e})
+
     def do_POST(self):
+        if self.path == "/api/sync":
+            return self._sync()
         if self.path != "/api/ics":
             return self._json(404, {"error": "Not found"})
         if "application/json" not in (self.headers.get("Content-Type") or ""):
