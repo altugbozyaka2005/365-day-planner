@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>365 Planner</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="favicon.svg">
+  <meta name="theme-color" content="#3b5bdb">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,6 +16,7 @@
       <button data-view="day">Day</button>
       <button data-view="week">Week</button>
       <button data-view="year">Year</button>
+      <button data-view="insights">Insights</button>
     </nav>
     <div class="datenav">
       <button id="prev" class="icon-btn" title="Previous (←)">‹</button>
@@ -21,8 +25,8 @@
       <input type="date" id="datePick" aria-label="Pick a date">
     </div>
     <div class="spacer"></div>
-    <div class="clock" title="Current time in London (Europe/London)">
-      <span class="clock-label">London</span>
+    <div class="clock" title="Current time in Edinburgh (UK time)">
+      <span class="clock-label">Edinburgh</span>
       <span id="clock">--:--:--</span>
     </div>
     <span id="saveState" class="save-state"></span>
@@ -123,21 +127,15 @@
       <div class="field" id="notifySection">
         <span>Slot-end notifications</span>
         <p class="muted small">
-          When a slot ends you get a notification (with a chime) and can rate it right there:
+          When a task or event you've put in your planner ends, a bell rings and a notification asks how it went:
           <b>✅ Completed</b> or <b>Not completed…</b>, which then asks <b>🔴 Distracted</b> / <b>🟡 Not efficient</b>.
-          Keep the planner open in a tab (it can be in the background) and click anywhere in it once after opening it, so the browser allows sound. Only slots within your shown hours are included. These settings apply to this device only.
+          Keep the planner open in a tab (it can be in the background) and click anywhere in it once after opening it, so the browser allows sound. Empty slots don't ring. These settings apply to this device only.
         </p>
         <div class="row">
           <button type="button" class="btn primary" id="notifyOn">Turn on notifications</button>
           <button type="button" class="btn" id="notifyTest">Send a test</button>
         </div>
-        <label class="field-inline">Notify for
-          <select id="notifyScope">
-            <option value="all">every slot</option>
-            <option value="planned">only slots with a plan or Outlook event</option>
-          </select>
-        </label>
-        <label class="check"><input type="checkbox" id="notifySound"> Play a sound when a slot ends (works even with notifications off)</label>
+        <label class="check"><input type="checkbox" id="notifySound"> Ring a bell when a task or event ends (works even with notifications off)</label>
         <p id="notifyStatus" class="muted small"></p>
       </div>
 

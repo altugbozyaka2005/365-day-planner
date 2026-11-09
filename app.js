@@ -482,7 +482,7 @@
   // ---------------------------------------------------------------------------
   let uiView = 'day';
   try { uiView = localStorage.getItem(UI_STORE) || 'day'; } catch (e) { /* ignore */ }
-  const state = { view: ['day', 'week', 'year'].includes(uiView) ? uiView : 'day', date: londonNow().date };
+  const state = { view: ['day', 'week', 'year', 'insights'].includes(uiView) ? uiView : 'day', date: londonNow().date };
   let sel = null;          // selected slots: { date, a, b } (slot start minutes)
   let activeItem = null;   // the task being edited: { date, id }
   let activeEvent = null;  // the event being edited in the week view: { date, i }
@@ -547,16 +547,18 @@
     return removed;
   }
 
+  const isGridView = () => state.view === 'day' || state.view === 'week';
   function render() {
     resetEvCache();
     pruneEmpty();
     $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
     $('#datePick').value = state.date;
-    $('#quickAddWrap').hidden = state.view === 'year';
+    $('#quickAddWrap').hidden = state.view !== 'day';
     if (activeItem && !findItem(activeItem.date, activeItem.id)) activeItem = null;
     renderTitle();
     if (state.view === 'day') renderDay();
     else if (state.view === 'week') renderWeek();
+    else if (state.view === 'insights') renderInsights();
     else renderYear();
     paintSel();
     paintNow();
@@ -580,16 +582,19 @@
       title = `${fmt(start, { day: 'numeric', month: 'short' })} – ${fmt(end, { day: 'numeric', month: 'short', year: 'numeric' })}`;
       meta = `<span class="badge">Week ${isoWeek(k)}</span>`;
       if (now.date >= start && now.date <= end) meta += '<span>This week</span>';
+    } else if (state.view === 'insights') {
+      title = 'Insights';
+      meta = `<span>${INS_RANGES[insRange]} up to ${fmt(k, { day: 'numeric', month: 'short', year: 'numeric' })}</span>`;
     } else {
       title = k.slice(0, 4);
       meta = `<span>${daysInYear(+k.slice(0, 4))} days</span>`;
     }
-    if (cal.url && state.view !== 'year') actions += `<button class="btn" data-act="cal-sync">↻ Outlook</button>`;
+    if (cal.url && isGridView()) actions += `<button class="btn" data-act="cal-sync">↻ Outlook</button>`;
     $('#title').textContent = title;
     $('#titleMeta').innerHTML = meta;
     $('#subActions').innerHTML = actions;
     updateCalStatus();
-    document.title = `${title} · 365 Planner`;
+    document.title = '365 Planner';
   }
 
   // ----- Rating controls -----
@@ -881,13 +886,6 @@
   }
 
   // ----- Week view -----
-  function weekLegend(days) {
-    const seen = new Map();
-    for (const k of days) for (const ev of [...eventsOn(k), ...allDayOn(k)]) { const c = categoryOf(ev); seen.set(c.id, c); }
-    if (!seen.size) return '';
-    return `<div class="legend">${[...seen.values()].map((c) => `<span class="legend-item"><span class="sw" style="background:${esc(c.color)}"></span>${esc(c.name)}</span>`).join('')}
-      <button class="link" data-act="edit-cats" style="margin:0">Edit categories</button></div>`;
-  }
   // Week grid: each day is a column on the same time scale; every task / event is one block
   // (title centred), clashes side by side, background rows are the day's slots.
   const WPPM = 1; // pixels per minute in the week grid (1 hour = 60px)
@@ -917,7 +915,7 @@
     const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
     const today = londonNow().date;
     const { startHour: sh, endHour: eh } = data.settings;
-    let html = weekLegend(days) + '<div class="week-wrap"><div class="week"><div class="wk-corner"></div>';
+    let html = '<div class="week-wrap"><div class="week"><div class="wk-corner"></div>';
     for (const k of days) {
       const st = dayStats(k), score = scoreOf(st);
       html += `<button class="wk-head ${k === today ? 'today' : ''}" data-act="open-day" data-date="${k}" title="Open day">
@@ -997,11 +995,267 @@
       <div class="yr-months">${months}</div>`;
   }
 
+  // ----- Insights: how your time and ratings add up over a period -----
+  const INS_RANGES = { 7: 'Last 7 days', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last 12 months' };
+  let insRange = 30;
+  try { const v = +localStorage.getItem('planner365.insRange'); if (INS_RANGES[v]) insRange = v; } catch (e) { /* ignore */ }
+  const pctTxt = (x) => (x === null || x === undefined ? '—' : `${Math.round(x * 100)}%`);
+  const ratedOf = (o) => o.g + o.y + o.r;
+
+  function insightsData(end, n) {
+    const start = addDays(end, -(n - 1));
+    const days = [];
+    for (let i = 0; i < n; i++) days.push(addDays(start, i));
+    const tot = { g: 0, y: 0, r: 0, unrated: 0, planned: 0, goals: 0, goalsDone: 0 };
+    const hours = Array.from({ length: 24 }, () => ({ g: 0, y: 0, r: 0 }));
+    const wdays = Array.from({ length: 7 }, () => ({ g: 0, y: 0, r: 0, days: 0 }));
+    const tasks = new Map(), cats = new Map();
+    let att = 0, miss = 0, moodSum = 0, moodN = 0, enSum = 0, enN = 0, activeDays = 0;
+    const perDay = [], energyDays = [];
+    const addHours = (s, e, st) => {
+      for (let h = Math.floor(s / 60); h * 60 < e && h < 24; h++) {
+        const m = Math.min(e, h * 60 + 60) - Math.max(s, h * 60);
+        if (m > 0) hours[h][st] += m;
+      }
+    };
+    for (const k of days) {
+      const st = dayStats(k);
+      const day = getDay(k);
+      perDay.push({ k, ...st, score: scoreOf(st) });
+      for (const f of Object.keys(tot)) tot[f] += st[f];
+      const w = wdays[dow(k)];
+      w.g += st.g; w.y += st.y; w.r += st.r;
+      if (ratedOf(st)) { w.days++; activeDays++; }
+      for (const it of itemsOf(k)) {
+        if (it.st) addHours(it.s, it.e, it.st);
+        const name = (it.t || '').trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        const t = tasks.get(key) || { name, n: 0, g: 0, y: 0, r: 0, unrated: 0 };
+        t.n++;
+        t[it.st || 'unrated'] += it.e - it.s;
+        tasks.set(key, t);
+      }
+      for (const ev of eventsOn(k)) {
+        const s = day && day.evr ? day.evr[evKey(ev)] : '';
+        if (s) addHours(ev.s, ev.e, s);
+        const c = categoryOf(ev);
+        const cs = cats.get(c.id) || { name: c.name, color: c.color, min: 0, n: 0, att: 0, miss: 0 };
+        cs.min += ev.e - ev.s; cs.n++;
+        if (evPart(ev)) {
+          if (s === 'g') { att++; cs.att++; } else if (s === 'r') { miss++; cs.miss++; }
+        }
+        cats.set(c.id, cs);
+      }
+      const r = (day && day.refl) || {};
+      if (r.mood) { moodSum += r.mood; moodN++; }
+      if (r.energy) { enSum += r.energy; enN++; energyDays.push({ energy: r.energy, score: scoreOf(st) }); }
+    }
+    return {
+      start, end, days, perDay, tot, hours, wdays, tasks: [...tasks.values()], cats: [...cats.values()],
+      att, miss, activeDays, mood: moodN ? moodSum / moodN : null, energy: enN ? enSum / enN : null, energyDays,
+    };
+  }
+
+  // Days in a row (ending today, or yesterday if today isn't rated yet) with a focus score of 60%+
+  function focusStreak(end) {
+    let k = end, n = 0;
+    if (scoreOf(dayStats(k)) === null) k = addDays(k, -1);
+    for (let i = 0; i < 3660; i++, k = addDays(k, -1)) {
+      const s = scoreOf(dayStats(k));
+      if (s === null || s < 0.6) break;
+      n++;
+    }
+    return n;
+  }
+  function bestStreak(perDay) {
+    let best = 0, cur = 0;
+    for (const d of perDay) { if (d.score !== null && d.score >= 0.6) best = Math.max(best, ++cur); else cur = 0; }
+    return best;
+  }
+
+  function insTile(label, value, sub, delta) {
+    let d = '';
+    if (delta && delta.v !== null && delta.v !== undefined && Math.abs(delta.v) >= 0.005) {
+      const up = delta.v > 0;
+      d = `<span class="ins-delta ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} ${delta.txt}</span>`;
+    }
+    return `<div class="card ins-tile"><div class="k">${label}</div><div class="v">${value}</div><div class="ins-sub">${sub || ''}${d}</div></div>`;
+  }
+
+  // Stacked columns of completed / not efficient / distracted time; long ranges are grouped by week
+  function insTrend(D) {
+    let cols = D.perDay.map((d) => ({ label: fmt(d.k, { weekday: 'short', day: 'numeric', month: 'short' }), short: d.k.slice(8), k: d.k, g: d.g, y: d.y, r: d.r }));
+    if (D.perDay.length > 45) {
+      const byWeek = [];
+      for (const d of D.perDay) {
+        const wk = weekStartOf(d.k);
+        let c = byWeek[byWeek.length - 1];
+        if (!c || c.k !== wk) { c = { k: wk, label: `Week of ${fmt(wk, { day: 'numeric', month: 'short' })}`, short: '', g: 0, y: 0, r: 0 }; byWeek.push(c); }
+        c.g += d.g; c.y += d.y; c.r += d.r;
+      }
+      cols = byWeek;
+    }
+    const max = Math.max(60, ...cols.map((c) => c.g + c.y + c.r));
+    const every = Math.ceil(cols.length / 10);
+    const bars = cols.map((c, i) => {
+      const t = c.g + c.y + c.r, sc = t ? (c.g + 0.5 * c.y) / t : null;
+      const tip = `${c.label}\n${t ? `Focus ${pctTxt(sc)}\n🟢 ${dur(c.g)} completed\n🟡 ${dur(c.y)} not efficient\n🔴 ${dur(c.r)} distracted` : 'Nothing rated'}`;
+      const seg = (v, cls) => (v ? `<span class="${cls}" style="height:${(v / max) * 100}%"></span>` : '');
+      return `<div class="ins-col" data-tip="${esc(tip)}" ${D.perDay.length <= 45 ? `data-act="open-day" data-date="${c.k}"` : ''}>
+        <div class="ins-stack">${seg(c.r, 's-r')}${seg(c.y, 's-y')}${seg(c.g, 's-g')}</div>
+        <span class="ins-x">${i % every === 0 ? (c.short || fmt(c.k, { day: 'numeric', month: 'short' })) : ''}</span></div>`;
+    }).join('');
+    return `<div class="card ins-card ins-wide">
+      <div class="card-head"><h2>Rated time per ${D.perDay.length > 45 ? 'week' : 'day'}</h2>
+        <span class="ins-legend"><span><i class="s-g"></i>Completed</span><span><i class="s-y"></i>Not efficient</span><span><i class="s-r"></i>Distracted</span></span></div>
+      <div class="ins-chart"><span class="ins-ymax">${dur(max)}</span>${bars}</div>
+    </div>`;
+  }
+
+  // One bar per bucket, height = focus score; buckets with little rated time are greyed out
+  function insScoreBars(title, sub, buckets) {
+    const bars = buckets.map((b) => {
+      const t = ratedOf(b), sc = t ? (b.g + 0.5 * b.y) / t : null;
+      const thin = t < 30;
+      const tip = `${b.label}\n${t ? `Focus ${pctTxt(sc)} over ${dur(t)} rated` : 'Nothing rated'}`;
+      return `<div class="ins-col" data-tip="${esc(tip)}">
+        <div class="ins-stack">${sc !== null ? `<span class="${thin ? 's-thin' : 's-acc'}" style="height:${Math.max(sc * 100, 2)}%"></span>` : ''}</div>
+        <span class="ins-x">${b.short}</span></div>`;
+    }).join('');
+    return `<div class="card ins-card"><div class="card-head"><h2>${title}</h2><span class="muted small">${sub}</span></div>
+      <div class="ins-chart score"><span class="ins-ymax">100%</span>${bars}</div></div>`;
+  }
+
+  function insHighlights(D) {
+    const out = [];
+    const hourScores = D.hours.map((h, i) => ({ i, t: ratedOf(h), sc: ratedOf(h) ? (h.g + 0.5 * h.y) / ratedOf(h) : null })).filter((h) => h.t >= 60);
+    if (hourScores.length >= 2) {
+      const best = hourScores.reduce((a, b) => (b.sc > a.sc ? b : a)), worst = hourScores.reduce((a, b) => (b.sc < a.sc ? b : a));
+      out.push(`Your most focused hour is <b>${pad(best.i)}:00–${pad(best.i + 1)}:00</b> (${pctTxt(best.sc)}); the hardest is <b>${pad(worst.i)}:00–${pad(worst.i + 1)}:00</b> (${pctTxt(worst.sc)}). Put demanding work in the first.`);
+    }
+    const wd = D.wdays.map((w, i) => ({ i, t: ratedOf(w), sc: ratedOf(w) ? (w.g + 0.5 * w.y) / ratedOf(w) : null })).filter((w) => w.t >= 60);
+    if (wd.length >= 3) {
+      const names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      const best = wd.reduce((a, b) => (b.sc > a.sc ? b : a)), worst = wd.reduce((a, b) => (b.sc < a.sc ? b : a));
+      if (best.i !== worst.i) out.push(`<b>${names[best.i]}</b> is your best day (${pctTxt(best.sc)}), <b>${names[worst.i]}</b> your weakest (${pctTxt(worst.sc)}).`);
+    }
+    const missed = D.tasks.filter((t) => t.r + t.y >= 30).sort((a, b) => (b.r + b.y) / ratedOf(b) - (a.r + a.y) / ratedOf(a))[0];
+    if (missed && ratedOf(missed)) out.push(`“${esc(missed.name)}” goes off track most often: ${pctTxt((missed.r + missed.y) / ratedOf(missed))} of its rated time was distracted or not efficient.`);
+    const planned = D.tot.planned;
+    if (planned) {
+      const ratedShare = 1 - D.tot.unrated / planned;
+      if (ratedShare < 0.6) out.push(`You rated ${pctTxt(ratedShare)} of your planned time. Rating more slots (or turning on slot-end notifications) makes these numbers more accurate.`);
+    }
+    const hi = D.energyDays.filter((d) => d.energy >= 4 && d.score !== null), lo = D.energyDays.filter((d) => d.energy <= 2 && d.score !== null);
+    if (hi.length >= 2 && lo.length >= 2) {
+      const avg = (a) => a.reduce((s, d) => s + d.score, 0) / a.length;
+      out.push(`On high-energy days your focus averages ${pctTxt(avg(hi))}, against ${pctTxt(avg(lo))} on low-energy days.`);
+    }
+    if (D.att + D.miss >= 3) out.push(`You attended ${D.att} of ${D.att + D.miss} lectures and meetings you marked (${pctTxt(D.att / (D.att + D.miss))}).`);
+    if (!out.length) out.push('Rate a few days of slots (🟢 🟡 🔴) and patterns will show up here: your best hours, best weekdays and the tasks that slip most.');
+    return `<div class="card ins-card ins-wide"><div class="card-head"><h2>What stands out</h2></div><ul class="ins-hl">${out.map((x) => `<li>${x}</li>`).join('')}</ul></div>`;
+  }
+
+  function insTasks(D) {
+    const rows = D.tasks.filter((t) => ratedOf(t) + t.unrated > 0)
+      .sort((a, b) => ratedOf(b) + b.unrated - (ratedOf(a) + a.unrated)).slice(0, 10);
+    if (!rows.length) return '';
+    const body = rows.map((t) => {
+      const total = ratedOf(t) + t.unrated, rt = ratedOf(t);
+      const seg = (v, cls) => (v ? `<span class="${cls}" style="width:${(v / total) * 100}%"></span>` : '');
+      return `<tr><td class="nm">${esc(t.name)}</td><td class="num">${t.n}×</td><td class="num">${dur(total)}</td>
+        <td><div class="ins-hbar" data-tip="${esc(`${t.name}\n🟢 ${dur(t.g)} · 🟡 ${dur(t.y)} · 🔴 ${dur(t.r)} · not rated ${dur(t.unrated)}`)}">${seg(t.g, 's-g')}${seg(t.y, 's-y')}${seg(t.r, 's-r')}${seg(t.unrated, 's-u')}</div></td>
+        <td class="num">${rt ? pctTxt((t.g + 0.5 * t.y) / rt) : '—'}</td></tr>`;
+    }).join('');
+    return `<div class="card ins-card ins-wide"><div class="card-head"><h2>Your tasks</h2><span class="muted small">top 10 by time planned</span></div>
+      <table class="ins-table"><thead><tr><th>Task</th><th class="num">Times</th><th class="num">Time</th><th>Ratings</th><th class="num">Focus</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  function insCats(D) {
+    const rows = D.cats.sort((a, b) => b.min - a.min);
+    if (!rows.length) return '';
+    const max = rows[0].min || 1;
+    return `<div class="card ins-card"><div class="card-head"><h2>Outlook time by category</h2></div>
+      <div class="ins-cats">${rows.map((c) => `<div class="ins-cat"><span class="nm"><i style="background:${esc(c.color)}"></i>${esc(c.name)}</span>
+        <span class="bar"><span style="width:${(c.min / max) * 100}%;background:${esc(c.color)}"></span></span>
+        <span class="num">${dur(c.min)}${c.att + c.miss ? ` · ${c.att}/${c.att + c.miss} attended` : ''}</span></div>`).join('')}</div></div>`;
+  }
+
+  function renderInsights() {
+    const end = state.date, n = insRange;
+    const D = insightsData(end, n);
+    const P = insightsData(addDays(end, -n), n); // the period before, for comparison
+    const sc = scoreOf(D.tot), psc = scoreOf(P.tot);
+    const rated = ratedOf(D.tot);
+    const goalRate = D.tot.goals ? D.tot.goalsDone / D.tot.goals : null;
+    const pGoal = P.tot.goals ? P.tot.goalsDone / P.tot.goals : null;
+    const hoursShown = [];
+    const { startHour: sh, endHour: eh } = data.settings;
+    for (let h = sh; h < eh; h++) hoursShown.push({ ...D.hours[h], label: `${pad(h)}:00–${pad(h + 1)}:00`, short: (h - sh) % 2 === 0 ? String(h) : '' });
+    const wnames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const wd = D.wdays.map((w, i) => ({ ...w, label: `${wnames[i]} (${w.days} rated day${w.days === 1 ? '' : 's'})`, short: wnames[i] }));
+    const streak = focusStreak(londonNow().date);
+    const tiles = [
+      insTile('Focus score', pctTxt(sc), rated ? `${dur(rated)} rated` : 'nothing rated yet',
+        sc !== null && psc !== null ? { v: sc - psc, txt: `${Math.abs(Math.round((sc - psc) * 100))} pts` } : null),
+      insTile('Time completed', dur(D.tot.g), `${D.activeDays} active day${D.activeDays === 1 ? '' : 's'}`,
+        P.tot.g ? { v: (D.tot.g - P.tot.g) / P.tot.g, txt: pctTxt(Math.abs((D.tot.g - P.tot.g) / P.tot.g)) } : null),
+      insTile('Distracted', dur(D.tot.r), rated ? `${pctTxt(D.tot.r / rated)} of rated time` : ''),
+      insTile('Goals done', D.tot.goals ? `${D.tot.goalsDone}/${D.tot.goals}` : '—', D.tot.goals ? pctTxt(goalRate) : 'no goals set',
+        goalRate !== null && pGoal !== null ? { v: goalRate - pGoal, txt: `${Math.abs(Math.round((goalRate - pGoal) * 100))} pts` } : null),
+      insTile('Focus streak', `${streak} day${streak === 1 ? '' : 's'}`, `days in a row at 60%+ · best in period ${bestStreak(D.perDay)}`),
+      insTile('Attendance', D.att + D.miss ? pctTxt(D.att / (D.att + D.miss)) : '—', D.att + D.miss ? `${D.att} attended · ${D.miss} missed` : 'no lectures marked'),
+      insTile('Mood · energy', D.mood ? `${MOODS[Math.round(D.mood) - 1]} ${D.energy ? `⚡${D.energy.toFixed(1)}` : ''}` : '—', D.mood || D.energy ? 'average from your reflections' : 'no reflections yet'),
+      insTile('Planned time', dur(D.tot.planned), D.tot.planned ? `${pctTxt(1 - D.tot.unrated / D.tot.planned)} of it rated` : ''),
+    ];
+    $('#main').innerHTML = `<div class="insights">
+      <div class="ins-ranges">${Object.entries(INS_RANGES).map(([v, l]) => `<button class="${+v === n ? 'on' : ''}" data-ins-range="${v}">${l}</button>`).join('')}
+        <span class="muted small">${fmt(D.start, { day: 'numeric', month: 'short', year: 'numeric' })} – ${fmt(D.end, { day: 'numeric', month: 'short', year: 'numeric' })} · ▲▼ compared with the ${n} days before</span></div>
+      <div class="ins-tiles">${tiles.join('')}</div>
+      <div class="ins-grid">
+        ${insHighlights(D)}
+        ${insTrend(D)}
+        ${insScoreBars('Focus by hour of day', 'grey = under 30 min rated', hoursShown)}
+        ${insScoreBars('Focus by weekday', 'grey = under 30 min rated', wd)}
+        ${insTasks(D)}
+        ${insCats(D)}
+      </div>
+    </div>`;
+  }
+
+  // Hover tooltips for the insight charts
+  (() => {
+    const tip = document.createElement('div');
+    tip.className = 'ins-tip';
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    document.addEventListener('pointermove', (e) => {
+      const el = state.view === 'insights' && e.target.closest && e.target.closest('.insights [data-tip]');
+      if (!el) { tip.hidden = true; return; }
+      tip.textContent = el.dataset.tip;
+      tip.hidden = false;
+      const w = tip.offsetWidth, h = tip.offsetHeight;
+      let x = e.clientX + 14, y = e.clientY + 14;
+      if (x + w > window.innerWidth - 8) x = e.clientX - w - 14;
+      if (y + h > window.innerHeight - 8) y = e.clientY - h - 14;
+      tip.style.left = `${Math.max(8, x)}px`;
+      tip.style.top = `${Math.max(8, y)}px`;
+    }, { passive: true });
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('[data-ins-range]');
+      if (!b) return;
+      insRange = +b.dataset.insRange;
+      try { localStorage.setItem('planner365.insRange', String(insRange)); } catch (err) { /* ignore */ }
+      render();
+    });
+  })();
+
   // ----- Live "now" highlight & selection painting -----
   function paintNow() {
     const now = londonNow();
     $('#clock').textContent = now.label;
-    if (state.view === 'year') return;
+    if (!isGridView()) return;
     const isToday = state.view === 'day' && state.date === now.date;
     const cur = viewUnitAt(now.date, now.min);
     const progress = ((now.min - cur.m) * 60 + now.sec) / (cur.L * 60);
@@ -1461,7 +1715,7 @@
   // Actions
   // ---------------------------------------------------------------------------
   function go(view, date) {
-    if (view && view !== state.view) { activeEvent = null; if (view === 'year') clearFocus(); }
+    if (view && view !== state.view) { activeEvent = null; if (!['day', 'week'].includes(view)) clearFocus(); }
     if (view) state.view = view;
     if (date) state.date = date;
     render();
@@ -1469,6 +1723,7 @@
   function step(dir) {
     if (state.view === 'day') state.date = addDays(state.date, dir);
     else if (state.view === 'week') state.date = addDays(state.date, 7 * dir);
+    else if (state.view === 'insights') state.date = addDays(state.date, insRange * dir);
     else state.date = addYears(state.date, dir);
     render();
   }
@@ -1621,7 +1876,7 @@
   }
   function weekStartOf(k) { return addDays(k, -dow(k)); }
   function navSel(dir, extend) {
-    if (state.view === 'year') return;
+    if (!isGridView()) return;
     const now = londonNow();
     if (!sel && activeItem) {
       const it = findItem(activeItem.date, activeItem.id);
@@ -1976,7 +2231,17 @@
 
     // Typing in a slot: Enter / ↑ / ↓ jump between boxes, Esc stops typing
     if (t.classList && (t.classList.contains('item-text') || t.classList.contains('ghost-text'))) {
-      if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        // Enter: save the task into its slot and stop editing
+        e.preventDefault();
+        if (t.classList.contains('item-text') && !t.value.trim()) { checkpoint([state.date]); removeItem(state.date, t.dataset.id); }
+        t.blur();
+        clearFocus();
+        flush();
+        render();
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         const all = $$('.item-text, .ghost-text');
         const j = all.indexOf(t) + ((e.key === 'ArrowUp' || (e.key === 'Enter' && e.shiftKey)) ? -1 : 1);
@@ -1990,7 +2255,7 @@
     // Typing in the week editor
     if (t.id === 'popText') {
       if (e.key === 'Escape') { e.preventDefault(); closePopover(); return; }
-      if (e.key === 'Enter' && t.dataset.id) { e.preventDefault(); closePopover(); return; }
+      if (e.key === 'Enter' && t.dataset.id) { e.preventDefault(); if (!t.value.trim()) { checkpoint([activeItem.date]); removeItem(activeItem.date, t.dataset.id); } closePopover(); flush(); render(); return; }
       const dir = ARROWS[e.key];
       const atStart = t.selectionStart === 0 && t.selectionEnd === 0;
       const atEnd = t.selectionStart === t.value.length && t.selectionEnd === t.value.length;
@@ -2008,18 +2273,18 @@
     const dir = ARROWS[e.key];
     if (dir) {
       e.preventDefault();
-      if (state.view === 'year') { if (dir === 'left' || dir === 'right') step(dir === 'left' ? -1 : 1); return; }
+      if (!isGridView()) { if (dir === 'left' || dir === 'right') step(dir === 'left' ? -1 : 1); return; }
       navSel(dir, e.shiftKey);
       return;
     }
 
     const k = e.key.toLowerCase();
-    if ((sel || activeItem || activeEvent) && state.view !== 'year') {
+    if ((sel || activeItem || activeEvent) && isGridView()) {
       if (k === 'g' || k === 'y' || k === 'r') { rateCurrent(k); e.preventDefault(); return; }
       if (k === 'backspace' || k === 'delete') { deleteCurrent(); e.preventDefault(); return; }
       if (k === 'escape') { if (itemMenuFor) { itemMenuFor = null; paintSel(); return; } clearFocus(); paintSel(); return; }
     }
-    if (sel && state.view !== 'year') {
+    if (sel && isGridView()) {
       if (k === '-' || k === '_') { selResize(-1); e.preventDefault(); return; }
       if (k === '+' || k === '=') { selResize(1); e.preventDefault(); return; }
       if (k === 'm') { mergeSel(); e.preventDefault(); return; }
@@ -3411,16 +3676,11 @@
     if (to === from) return;
     lastCheck.min = to;
     const key = now.date;
-    const { startHour: sh, endHour: eh } = data.settings;
-    const ended = (e) => e > from && e <= to && e > sh * 60 && e <= eh * 60;
+    // only things you planned (tasks) or that are in your calendar (events) ring the bell; empty slots don't
+    const ended = (e) => e > from && e <= to;
     const targets = [];
     for (const it of itemsOf(key)) if (ended(it.e) && !it.st) targets.push({ kind: 'item', id: it.id });
     for (const ev of eventsOn(key)) if (ended(ev.e) && !evStatus(key, ev)) targets.push({ kind: 'event', ev });
-    if (notifyPrefs.scope === 'all') {
-      for (const u of unitsOfDay(key)) {
-        if (ended(u.m + u.L) && !u.items.length && !u.evs.length && !looseEvents(key, u).length) targets.push({ kind: 'slot', m: u.m, L: u.L });
-      }
-    }
     if (!targets.length) return;
     // one bell per batch, and only from one tab when several are open
     let played = false;
@@ -3445,12 +3705,11 @@
     if (!('Notification' in window)) txt = 'This browser doesn’t support notifications.';
     else if (!window.isSecureContext) txt = 'Notifications only work over https or on localhost.';
     else if (Notification.permission === 'denied') txt = 'Notifications are blocked for this site. Click the icon left of the address bar → allow Notifications, then try again.';
-    else if (n.on && granted) txt = `On: you'll be asked to rate each task, event and slot as it ends.${Notification.maxActions >= 3 ? '' : ' (This browser shows 2 buttons per notification, so “Not completed…” opens a second question.)'}`;
+    else if (n.on && granted) txt = `On: you'll be asked how it went each time a task or event ends.${Notification.maxActions >= 3 ? '' : ' (This browser shows 2 buttons per notification, so “Not completed…” opens a second question.)'}`;
     else txt = 'Off.';
     if (n.sound) txt += audioReady() ? ' Sound: on.' : ' Sound: click anywhere in the planner once after opening it, so the browser allows it to play sound.';
     $('#notifyStatus').textContent = txt;
     $('#notifyOn').textContent = n.on && granted ? 'Turn off notifications' : 'Turn on notifications';
-    $('#notifyScope').value = n.scope;
     $('#notifySound').checked = !!n.sound;
   }
   $('#notifyOn').addEventListener('click', async () => {
@@ -3475,7 +3734,6 @@
     notifyFor(now.date, { kind: 'slot', m: u.m, L: u.L }, { test: true });
     updateNotifyStatus();
   });
-  $('#notifyScope').addEventListener('change', (e) => { notifyPrefs.scope = e.target.value; saveNotifyPrefs(); });
   $('#notifySound').addEventListener('change', (e) => { notifyPrefs.sound = e.target.checked; saveNotifyPrefs(); if (e.target.checked) { unlockAudio(); chime(); } updateNotifyStatus(); });
 
   // Rating links opened by a notification when no planner tab was open (?rate=… / ?open=…)

@@ -6,7 +6,7 @@ A day planner that splits your day into time slots (15 minutes by default) and l
 - **Tasks with their own time window.** Several tasks (and Outlook events) can share a slot and are shown side by side, like a calendar. Drag the two-handle time slider to stretch a task over more slots; a task covering several slots merges them into one.
 - **Ratings:** 🟢 completed · 🟡 wasn't efficient enough · 🔴 not attempted / distracted. The day summary turns these into a focus score.
 - **Day, week and year views.** Each day has its own goals list. The week view lets you edit slots in place. The year view colours every day by focus score.
-- **Live "now" slot** in London time.
+- **Live "now" slot** in UK time (shown as Edinburgh).
 - **Outlook calendar (read-only).** Events from a published ICS link appear as one merged slot each, colour-coded by keyword categories you can edit.
 - **Stored in your browser** (localStorage), with JSON export/import for backups.
 
@@ -36,7 +36,7 @@ There's no password reset. If you forget the password, the synced copy can't be 
 
 ## Slot-end notifications
 
-In **⚙ Settings → Slot-end notifications**, click **Turn on notifications**. When each slot ends you get a notification with a chime. Click **✅ Completed** or **Not completed…**, which then asks **🔴 Distracted** or **🟡 Not efficient**. Chrome allows only two buttons per notification, hence the two steps. A bell also rings when a slot ends, even with notifications off; click anywhere in the planner once after opening it so the browser allows sound. These settings apply to each device separately and aren't synced. Keep the planner open in a tab; it can be in the background. On macOS, set Chrome's notifications to **Alerts** in System Settings → Notifications so the buttons stay on screen.
+In **⚙ Settings → Slot-end notifications**, click **Turn on notifications**. When a task or event in your planner ends, a bell rings and you get a notification asking how it went; empty slots stay quiet. Click **✅ Completed** or **Not completed…**, which then asks **🔴 Distracted** or **🟡 Not efficient**. Chrome allows only two buttons per notification, hence the two steps. The bell also rings with notifications off; click anywhere in the planner once after opening it so the browser allows sound. These settings apply to each device separately and aren't synced. Keep the planner open in a tab; it can be in the background. On macOS, set Chrome's notifications to **Alerts** in System Settings → Notifications so the buttons stay on screen.
 
 ## Connect Outlook
 
